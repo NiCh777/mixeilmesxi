@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="ka">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Football Online Sync V3</title>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    <style>
+        body { margin: 0; background: #a8e6cf; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; overflow: hidden; touch-action: none; }
+        #setup-menu, #name-menu, #waiting-screen { position: absolute; inset: 0; background: #a8e6cf; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; }
+        #name-menu, #waiting-screen { display: none; }
+        .menu-btn { padding: 18px; margin: 10px; font-size: 18px; cursor: pointer; border: none; border-radius: 15px; color: white; width: 260px; font-weight: bold; }
+        #btn-p1 { background: #0052cc; } #btn-p2 { background: #cc0000; }
+        .menu-btn:disabled { background: #7f8c8d !important; opacity: 0.6; }
+        input { padding: 15px; font-size: 18px; border-radius: 10px; border: 2px solid #1a472a; margin-bottom: 10px; width: 240px; text-align: center; }
+        canvas { background: #1a472a; border: 5px solid #ffffff; border-radius: 10px; display: none; max-width: 95vw; }
+        #score-board { font-size: 26px; margin-bottom: 10px; display: none; font-weight: 900; background: white; padding: 8px 20px; border-radius: 15px; }
+        #countdown { position: absolute; font-size: 100px; color: white; font-weight: 900; text-shadow: 4px 4px 0px #000; display: none; z-index: 50; }
+        .controls { position: fixed; bottom: 25px; display: none; gap: 20px; }
+        .btn { width: 75px; height: 75px; background: rgba(255,255,255,0.6); border: 2px solid #333; border-radius: 50%; font-size: 30px; display: flex; align-items: center; justify-content: center; touch-action: none; }
+    </style>
+</head>
+<body>
+
+<div id="setup-menu">
+    <h1>FOOTBALL ONLINE</h1>
+    <button class="menu-btn" id="btn-p1" onclick="choseColor('p1')">PLAYER 1 (BLUE)</button>
+    <button class="menu-btn" id="btn-p2" onclick="choseColor('p2')">PLAYER 2 (RED)</button>
+</div>
+
+<div id="name-menu">
+    <input type="text" id="username" placeholder="სახელი..." maxlength="10">
+    <button class="menu-btn" style="background: #1a472a;" onclick="startGame()">დადასტურება</button>
+</div>
+
+<div id="waiting-screen">
+    <h2 id="wait-msg">ველოდებით მეორე მოთამაშეს...</h2>
+</div>
+
+<div id="countdown"></div>
+
+<div id="score-board">
+    <span id="n1">P1</span> <span id="s1">0</span> : <span id="s2">0</span> <span id="n2">P2</span>
+</div>
+<canvas id="game"></canvas>
+
+<div class="controls" id="controls">
+    <button class="btn" id="left">⬅️</button>
+    <button class="btn" id="up">⬆️</button>
+    <button class="btn" id="right">➡️</button>
+</div>
+
+<script>
+    const config = {
+        apiKey: "AIzaSyDSMrfnR1K19ScIiKov2uYSc_3Yz4DjlpA",
+        authDomain: "football-79702.firebaseapp.com",
+        projectId: "football-79702",
+        databaseURL: "https://football-79702-default-rtdb.firebaseio.com/",
+        storageBucket: "football-79702.firebasestorage.app",
+        messagingSenderId: "611649746367",
+        appId: "1:611649746367:web:641820dc87089377915d0a"
+    };
+
+    firebase.initializeApp(config);
+    const db = firebase.database();
+    const stateRef = db.ref('game_state');
+    const presenceRef = db.ref('presence');
+
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    canvas.width = 800; canvas.height = 400;
+
+    let role = null, myName = "", gameActive = false, playersReady = false;
+    let p1 = { x: 100, y: 340, dy: 0, s: 0, name: "P1" };
+    let p2 = { x: 650, y: 340, dy: 0, s: 0, name: "P2" };
+    let ball = { x: 400, y: 200, dx: 0, dy: 0, lastHit: "p1" };
+
+    presenceRef.on('value', (s) => {
+        const d = s.val() || {};
+        document.getElementById('btn-p1').disabled = !!(d.p1 && role !== 'p1');
+        document.getElementById('btn-p2').disabled = !!(d.p2 && role !== 'p2');
+        
+        if (d.p1 && d.p2 && !playersReady) {
+            playersReady = true;
+            runCountdown();
+        }
+    });
+
+    function choseColor(r) {
+        role = r;
+        document.getElementById('setup-menu').style.display = 'none';
+        document.getElementById('name-menu').style.display = 'flex';
+    }
+
+    async function startGame() {
+        myName = document.getElementById('username').value || role;
+        if(role === 'p1') await stateRef.remove();
+        
+        presenceRef.child(role).set(true);
+        presenceRef.child(role).onDisconnect().remove();
+        stateRef.child(role).update({ name: myName, s: 0, x: role==='p1'?100:650, y: 340 });
+
+        document.getElementById('name-menu').style.display = 'none';
+        document.getElementById('waiting-screen').style.display = 'flex';
+        
+        requestAnimationFrame(update);
+    }
+
+    function runCountdown() {
+        document.getElementById('waiting-screen').style.display = 'none';
+        document.getElementById('game').style.display = 'block';
+        document.getElementById('score-board').style.display = 'block';
+        document.getElementById('controls').style.display = 'flex';
+        
+        const cdDiv = document.getElementById('countdown');
+        cdDiv.style.display = 'block';
+        let count = 3;
+        
+        const interval = setInterval(() => {
+            cdDiv.innerText = count > 0 ? count : "GO!";
+            if (count < 0) {
+                clearInterval(interval);
+                cdDiv.style.display = 'none';
+                gameActive = true;
+                if(role === 'p1') resetBall();
+            }
+            count--;
+        }, 1000);
+    }
+
+    stateRef.on('value', (s) => {
+        const d = s.val() || {};
+        if (d.p1) { p1.s = d.p1.s; p1.name = d.p1.name; if(role==='p2') { p1.x=d.p1.x; p1.y=d.p1.y; } }
+        if (d.p2) { p2.s = d.p2.s; p2.name = d.p2.name; if(role==='p1') { p2.x=d.p2.x; p2.y=d.p2.y; } }
+        if (d.ball && d.ball.lastHit !== role) ball = d.ball;
+        
+        document.getElementById('s1').innerText = p1.s; document.getElementById('s2').innerText = p2.s;
+        document.getElementById('n1').innerText = p1.name; document.getElementById('n2').innerText = p2.name;
+    });
+
+    const keys = {};
+    window.onkeydown = (e) => keys[e.code] = true;
+    window.onkeyup = (e) => keys[e.code] = false;
+
+    const ctrl = { l: false, r: false };
+    document.getElementById('left').ontouchstart = (e) => { e.preventDefault(); ctrl.l = true; };
+    document.getElementById('left').ontouchend = () => ctrl.l = false;
+    document.getElementById('right').ontouchstart = (e) => { e.preventDefault(); ctrl.r = true; };
+    document.getElementById('right').ontouchend = () => ctrl.r = false;
+    document.getElementById('up').ontouchstart = (e) => { e.preventDefault(); if(!gameActive) return; let me = (role==='p1'?p1:p2); if(me.y >= 340) me.dy = -13; };
+
+    function update() {
+        ctx.clearRect(0, 0, 800, 400);
+        let me = role === 'p1' ? p1 : p2;
+
+        if (gameActive) {
+            if (keys['ArrowLeft'] || ctrl.l) me.x -= 7;
+            if (keys['ArrowRight'] || ctrl.r) me.x += 7;
+            if ((keys['ArrowUp'] || keys['Space']) && me.y >= 340) me.dy = -13;
+
+            me.dy += 0.7; me.y += me.dy;
+            if(me.y > 340) { me.y = 340; me.dy = 0; }
+            me.x = Math.max(0, Math.min(750, me.x));
+
+            stateRef.child(role).update({ x: me.x, y: me.y });
+
+            // ბურთის ფიზიკა
+            ball.x += ball.dx; ball.y += ball.dy;
+            ball.dy += 0.25;
+
+            if(ball.y > 385) { ball.y = 385; ball.dy *= -0.6; }
+            if(ball.y < 0) { ball.y = 0; ball.dy *= -0.6; }
+
+            if(ball.x > me.x - 10 && ball.x < me.x + 60 && ball.y > me.y - 10 && ball.y < me.y + 70) {
+                ball.dy = -10;
+                ball.dx = (ball.x - (me.x + 25)) * 0.4;
+                ball.lastHit = role;
+                stateRef.child('ball').set(ball);
+            }
+
+            if(role === 'p1') {
+                if(ball.x < 0 && ball.y > 200) { stateRef.child('p2/s').set(p2.s + 1); resetBall(); }
+                else if(ball.x > 800 && ball.y > 200) { stateRef.child('p1/s').set(p1.s + 1); resetBall(); }
+                if(ball.x < 0 || ball.x > 800) ball.dx *= -1;
+            }
+        }
+
+        // ხატვა
+        ctx.fillStyle = "#0052cc"; ctx.fillRect(p1.x, p1.y, 50, 60);
+        ctx.fillStyle = "#cc0000"; ctx.fillRect(p2.x, p2.y, 50, 60);
+        ctx.fillStyle = "white"; ctx.beginPath(); ctx.arc(ball.x, ball.y, 12, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = "rgba(255,255,255,0.3)"; ctx.fillRect(0, 200, 10, 200); ctx.fillRect(790, 200, 10, 200);
+
+        function resetBall() {
+            ball = { x: 400, y: 150, dx: (Math.random()>0.5?3:-3), dy: 2, lastHit: 'p1' };
+            stateRef.child('ball').set(ball);
+        }
+        requestAnimationFrame(update);
+    }
+</script>
+</body>
+</html>
