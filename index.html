@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Football Online Sync V3</title>
+    <title>Football Online Sync V3 - Fixed</title>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
     <style>
@@ -18,7 +18,7 @@
         #score-board { font-size: 26px; margin-bottom: 10px; display: none; font-weight: 900; background: white; padding: 8px 20px; border-radius: 15px; }
         #countdown { position: absolute; font-size: 100px; color: white; font-weight: 900; text-shadow: 4px 4px 0px #000; display: none; z-index: 50; }
         .controls { position: fixed; bottom: 25px; display: none; gap: 20px; }
-        .btn { width: 75px; height: 75px; background: rgba(255,255,255,0.6); border: 2px solid #333; border-radius: 50%; font-size: 30px; display: flex; align-items: center; justify-content: center; touch-action: none; }
+        .btn { width: 75px; height: 75px; background: rgba(255,255,255,0.6); border: 2px solid #333; border-radius: 50%; font-size: 30px; display: flex; align-items: center; justify-content: center; touch-action: none; user-select: none; }
     </style>
 </head>
 <body>
@@ -94,17 +94,29 @@
     }
 
     async function startGame() {
-        myName = document.getElementById('username').value || role;
+        myName = document.getElementById('username').value || role.toUpperCase();
         if(role === 'p1') await stateRef.remove();
         
         presenceRef.child(role).set(true);
         presenceRef.child(role).onDisconnect().remove();
+        
         stateRef.child(role).update({ name: myName, s: 0, x: role==='p1'?100:650, y: 340 });
 
         document.getElementById('name-menu').style.display = 'none';
         document.getElementById('waiting-screen').style.display = 'flex';
         
         requestAnimationFrame(update);
+        
+        // Sync მონაცემების გაგზავნა 50ms-ში ერთხელ (20 FPS Sync)
+        setInterval(() => {
+            if (gameActive && role) {
+                let me = role === 'p1' ? p1 : p2;
+                stateRef.child(role).update({ x: me.x, y: me.y });
+                if (ball.lastHit === role) {
+                    stateRef.child('ball').set(ball);
+                }
+            }
+        }, 50);
     }
 
     function runCountdown() {
@@ -133,6 +145,7 @@
         const d = s.val() || {};
         if (d.p1) { p1.s = d.p1.s; p1.name = d.p1.name; if(role==='p2') { p1.x=d.p1.x; p1.y=d.p1.y; } }
         if (d.p2) { p2.s = d.p2.s; p2.name = d.p2.name; if(role==='p1') { p2.x=d.p2.x; p2.y=d.p2.y; } }
+        // ბურთს ვიღებთ ბაზიდან მხოლოდ მაშინ, თუ მას სხვა მართავს
         if (d.ball && d.ball.lastHit !== role) ball = d.ball;
         
         document.getElementById('s1').innerText = p1.s; document.getElementById('s2').innerText = p2.s;
@@ -148,13 +161,24 @@
     document.getElementById('left').ontouchend = () => ctrl.l = false;
     document.getElementById('right').ontouchstart = (e) => { e.preventDefault(); ctrl.r = true; };
     document.getElementById('right').ontouchend = () => ctrl.r = false;
-    document.getElementById('up').ontouchstart = (e) => { e.preventDefault(); if(!gameActive) return; let me = (role==='p1'?p1:p2); if(me.y >= 340) me.dy = -13; };
+    document.getElementById('up').ontouchstart = (e) => { 
+        e.preventDefault(); 
+        if(!gameActive) return; 
+        let me = (role==='p1'?p1:p2); 
+        if(me.y >= 340) me.dy = -13; 
+    };
+
+    function resetBall() {
+        ball = { x: 400, y: 150, dx: (Math.random()>0.5?4:-4), dy: 2, lastHit: 'p1' };
+        stateRef.child('ball').set(ball);
+    }
 
     function update() {
         ctx.clearRect(0, 0, 800, 400);
         let me = role === 'p1' ? p1 : p2;
 
         if (gameActive) {
+            // მოძრაობა
             if (keys['ArrowLeft'] || ctrl.l) me.x -= 7;
             if (keys['ArrowRight'] || ctrl.r) me.x += 7;
             if ((keys['ArrowUp'] || keys['Space']) && me.y >= 340) me.dy = -13;
@@ -163,39 +187,41 @@
             if(me.y > 340) { me.y = 340; me.dy = 0; }
             me.x = Math.max(0, Math.min(750, me.x));
 
-            stateRef.child(role).update({ x: me.x, y: me.y });
+            // ბურთის ფიზიკას ითვლის მხოლოდ ის, ვინც ბოლოს შეეხო
+            if (ball.lastHit === role || (role === 'p1' && ball.lastHit === 'p1')) {
+                ball.x += ball.dx; ball.y += ball.dy;
+                ball.dy += 0.25;
 
-            // ბურთის ფიზიკა
-            ball.x += ball.dx; ball.y += ball.dy;
-            ball.dy += 0.25;
+                // კედლებიდან ასხლეტა
+                if(ball.y > 385) { ball.y = 385; ball.dy *= -0.6; }
+                if(ball.y < 0) { ball.y = 0; ball.dy *= -0.6; }
+                if(ball.x < 0 || ball.x > 800) ball.dx *= -0.8;
 
-            if(ball.y > 385) { ball.y = 385; ball.dy *= -0.6; }
-            if(ball.y < 0) { ball.y = 0; ball.dy *= -0.6; }
-
-            if(ball.x > me.x - 10 && ball.x < me.x + 60 && ball.y > me.y - 10 && ball.y < me.y + 70) {
-                ball.dy = -10;
-                ball.dx = (ball.x - (me.x + 25)) * 0.4;
-                ball.lastHit = role;
-                stateRef.child('ball').set(ball);
+                // გოლის დათვლა (მხოლოდ P1 რომ არ აირიოს)
+                if(role === 'p1') {
+                    if(ball.x < 10 && ball.y > 200) { stateRef.child('p2/s').set(p2.s + 1); resetBall(); }
+                    else if(ball.x > 790 && ball.y > 200) { stateRef.child('p1/s').set(p1.s + 1); resetBall(); }
+                }
             }
 
-            if(role === 'p1') {
-                if(ball.x < 0 && ball.y > 200) { stateRef.child('p2/s').set(p2.s + 1); resetBall(); }
-                else if(ball.x > 800 && ball.y > 200) { stateRef.child('p1/s').set(p1.s + 1); resetBall(); }
-                if(ball.x < 0 || ball.x > 800) ball.dx *= -1;
+            // შეხების დეტექცია
+            if(ball.x > me.x - 15 && ball.x < me.x + 65 && ball.y > me.y - 15 && ball.y < me.y + 75) {
+                ball.dy = -10;
+                ball.dx = (ball.x - (me.x + 25)) * 0.5;
+                ball.lastHit = role;
             }
         }
 
         // ხატვა
-        ctx.fillStyle = "#0052cc"; ctx.fillRect(p1.x, p1.y, 50, 60);
-        ctx.fillStyle = "#cc0000"; ctx.fillRect(p2.x, p2.y, 50, 60);
-        ctx.fillStyle = "white"; ctx.beginPath(); ctx.arc(ball.x, ball.y, 12, 0, Math.PI*2); ctx.fill();
-        ctx.fillStyle = "rgba(255,255,255,0.3)"; ctx.fillRect(0, 200, 10, 200); ctx.fillRect(790, 200, 10, 200);
+        ctx.fillStyle = "#0052cc"; ctx.fillRect(p1.x, p1.y, 50, 60); // P1
+        ctx.fillStyle = "#cc0000"; ctx.fillRect(p2.x, p2.y, 50, 60); // P2
+        ctx.fillStyle = "white"; ctx.beginPath(); ctx.arc(ball.x, ball.y, 12, 0, Math.PI*2); ctx.fill(); // ბურთი
+        
+        // კარები
+        ctx.fillStyle = "rgba(255,255,255,0.3)"; 
+        ctx.fillRect(0, 200, 10, 200); 
+        ctx.fillRect(790, 200, 10, 200);
 
-        function resetBall() {
-            ball = { x: 400, y: 150, dx: (Math.random()>0.5?3:-3), dy: 2, lastHit: 'p1' };
-            stateRef.child('ball').set(ball);
-        }
         requestAnimationFrame(update);
     }
 </script>
